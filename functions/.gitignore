@@ -1,4 +1,5 @@
-template
+template/*
+!template/python3-smd/
 build
 .secrets
 .venv
