@@ -9,7 +9,9 @@
 #include <sys/stat.h>
 
 JunctionD::JunctionD() {
-    monitorThread = std::thread([this]() { monitorInstances(); });
+    monitorThread = std::thread([this]() { 
+        monitorInstances(); 
+    });
     monitorThread.detach();
 }
 
@@ -69,6 +71,7 @@ std::vector<FunctionStatus> JunctionD::list() {
     return functions;
 }
 
+// This runs in a continuous background loop to clean up dead processes.
 void JunctionD::monitorInstances() {
     while (true) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
@@ -86,6 +89,7 @@ void JunctionD::monitorInstances() {
         }
     }
 }
+
 bool JunctionD::generateConfig(const FunctionData &func, std::string &cfgPath) {
     std::string name   = func.name.empty() ? "function_default" : func.name;
     std::string rootfs = func.rootfs.empty() ? "/rootfs" : func.rootfs;

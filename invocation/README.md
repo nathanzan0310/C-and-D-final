@@ -11,5 +11,5 @@ AzureTrace.parquet: inference data. (head of dataset below)
 prompts.json: mapping from token_bucket size to corresponding prompt to invoke.
 e.g. {"small": [prompt here], "medium": [ slightly longer prompt here], ...}
 
-invokepattern.py : INCOMPLETE
-convert.py: Processing (NOT NEEDED IF AzureTrace.parquet IS THERE)
+invokepattern.py : INCOMPLETE.  
+convert.py: Processing (NOT NEEDED IF AzureTrace.parquet IS THERE).  
