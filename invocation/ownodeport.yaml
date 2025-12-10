@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ow-controller-nodeport
+  namespace: openwhisk
+spec:
+  type: NodePort
+  selector:
+    component: controller
+  ports:
+    - protocol: TCP
+      port: 8080       # pod port
+      targetPort: 8080 # same as pod port
+      nodePort: 30080  # external port on node
