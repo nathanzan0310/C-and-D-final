@@ -27,8 +27,6 @@ def _load_trace(trace_path: Path, scale_time: float, limit: Optional[int]):
         labels = ["small", "medium", "large", "xl"]
         df["token_bucket"] = pd.cut(df["ContextTokens"], bins=bins, labels=labels, include_lowest=True)
 
-    # Normalize timestamps to seconds since start
-    # Some traces mix timezone-aware/naive timestamps; be permissive and keep UTC.
     ts = pd.to_datetime(df["TIMESTAMP"], utc=True, format="ISO8601", errors="coerce")
     if ts.isna().any():
         raise ValueError("trace TIMESTAMP contains unparsable rows; consider cleaning input")
@@ -49,6 +47,9 @@ def replay(trace_path: Path, prompts_path: Path, invoke_url: str, output_csv: Pa
         "distilbert-base-uncased-finetuned-sst-2-english",
         cache_dir=cache_dir,
     )
+
+    if not invoke_url.endswith("/infer_warm"):
+        invoke_url = invoke_url.rstrip("/") + "/infer_warm"
 
     start = time.time()
     results = []
@@ -95,13 +96,13 @@ def replay(trace_path: Path, prompts_path: Path, invoke_url: str, output_csv: Pa
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Replay Azure-style trace and record latency.")
+    parser = argparse.ArgumentParser(description="Replay trace against /infer_warm and record latency.")
     parser.add_argument("--trace", default="invocation/AzureTrace.parquet", help="Path to trace parquet/csv")
     parser.add_argument("--prompts", default="invocation/prompts.json", help="Path to prompts mapping")
-    parser.add_argument("--url", required=True, help="Invocation URL of the function")
-    parser.add_argument("--out", default="invocation/replay_latencies.csv", help="Where to write results CSV")
+    parser.add_argument("--url", required=True, help="Base URL of the gateway (will append /infer_warm if missing)")
+    parser.add_argument("--out", default="invocation/replay_latencies_warm.csv", help="Where to write results CSV")
     parser.add_argument("--timeout", type=float, default=10.0, help="Per-request timeout seconds")
-    parser.add_argument("--scale-time", type=float, default=1.0, help="Scale factor for inter-arrival times (e.g., 0.5 = 2x speedup)")
+    parser.add_argument("--scale-time", type=float, default=1.0, help="Scale factor for inter-arrival times")
     parser.add_argument("--limit", type=int, default=None, help="Optional limit on number of requests")
     args = parser.parse_args()
 

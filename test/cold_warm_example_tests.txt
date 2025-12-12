@@ -1,0 +1,15 @@
+# Cold path (per-request cold start via /infer)
+python latency_test.py --url http://127.0.0.1:8080/infer \
+    --trace datasets/AzureTrace.parquet \
+    --prompts datasets/prompts.json \
+    --out invocation/replay_latencies.csv \
+    --scale-time 1.0 \
+    --limit 500
+
+# Warm path (reuses warm instance via /infer_warm). If gateway is inside Junction, use its guest IP.
+python latency_test_warm.py --url http://127.0.0.1:8080/infer_warm     \
+    --trace datasets/AzureTrace.parquet     \
+    --prompts datasets/prompts.json     
+    --out results/e2e_warm_500.csv     \
+    --scale-time 1.0     \
+    --limit 500
