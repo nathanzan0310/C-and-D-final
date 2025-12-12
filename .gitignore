@@ -2,3 +2,6 @@
 hf-cache/
 junction-functions/onnx*
 distilbert-finetuned/
+build/
+datasets/
+test/invocation/
