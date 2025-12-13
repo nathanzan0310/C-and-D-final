@@ -1,70 +1,127 @@
 from pathlib import Path
 import os
-from transformers import AutoModelForCausalLM, AutoTokenizer
 import torch
+import torch.nn as nn
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-# --- Configuration ---
+# ---------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------
 model_id = "gpt2"
 output_filename = "gpt2.onnx"
 
-# --- Setup ---
+# ---------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------
 cache_dir = Path(os.environ.get("HF_HOME", Path.cwd() / "hf-cache"))
 output_dir = Path(os.environ.get("ONNX_OUT", Path.cwd()))
 cache_dir.mkdir(parents=True, exist_ok=True)
 output_dir.mkdir(parents=True, exist_ok=True)
+
 output_path = output_dir / output_filename
 
-print(f"Starting export for {model_id} (Generation with Cache) to {output_path}")
+print(f"Exporting {model_id} → {output_path}")
 
-# 1. Load Model
+# ---------------------------------------------------------------------
+# Load model
+# ---------------------------------------------------------------------
 tokenizer = AutoTokenizer.from_pretrained(model_id, cache_dir=cache_dir)
-model = AutoModelForCausalLM.from_pretrained(model_id, cache_dir=cache_dir)
-model.eval()
-model.config.use_cache = True # Required for optimized generation
 
-# 2. Define Inputs for Single-Step Trace
+model = AutoModelForCausalLM.from_pretrained(
+    model_id,
+    cache_dir=cache_dir,
+    torch_dtype=torch.float32,
+)
+
+model.eval()
+model.config.use_cache = True
+
+# ---------------------------------------------------------------------
+# Wrapper (CRITICAL)
+# ---------------------------------------------------------------------
+class GPT2ONNXWrapper(nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+        self.num_layers = model.config.n_layer
+
+    def forward(self, input_ids, attention_mask, *past):
+        past_key_values = tuple(
+            (past[2 * i], past[2 * i + 1])
+            for i in range(self.num_layers)
+        )
+
+        outputs = self.model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            use_cache=True,
+        )
+
+        flat_present = tuple(
+            t for layer in outputs.past_key_values for t in layer
+        )
+
+        return (outputs.logits,) + flat_present
+
+
+wrapped_model = GPT2ONNXWrapper(model)
+wrapped_model.eval()
+
+# ---------------------------------------------------------------------
+# Dummy inputs (single-token decode)
+# ---------------------------------------------------------------------
 num_layers = model.config.n_layer
 num_heads = model.config.n_head
 head_dim = model.config.n_embd // num_heads
-past_seq_len = 10 # Dummy length for trace shape
+past_seq_len = 8  # dummy cache length
 
 input_ids = torch.ones((1, 1), dtype=torch.long)
 attention_mask = torch.ones((1, 1), dtype=torch.long)
 
-# Create dummy past_key_values (cache)
-# NOTE: Logic is identical to DistilGPT2, only the size of n_layer/n_head changes
-past_shape = [1, num_heads, past_seq_len, head_dim]
+past_shape = (1, num_heads, past_seq_len, head_dim)
+
 past_key_values = tuple(
-    [(torch.rand(past_shape), torch.rand(past_shape))
-     for _ in range(num_layers)]
+    (torch.zeros(past_shape), torch.zeros(past_shape))
+    for _ in range(num_layers)
 )
 
-# Flatten arguments for torch.onnx.export
 flattened_past = tuple(t for layer in past_key_values for t in layer)
 model_args = (input_ids, attention_mask) + flattened_past
 
-# 3. Define names and dynamic axes for the traced graph (including cache)
+# ---------------------------------------------------------------------
+# ONNX IO names + dynamic axes
+# ---------------------------------------------------------------------
 input_names = ["input_ids", "attention_mask"]
 output_names = ["logits"]
-dynamic_axes = {"input_ids": {0: "batch"}, "logits": {0: "batch", 1: "sequence"}}
+
+dynamic_axes = {
+    "input_ids": {0: "batch"},
+    "attention_mask": {0: "batch"},
+    "logits": {0: "batch", 1: "sequence"},
+}
 
 for i in range(num_layers):
-    input_names.extend([f"past_key_values.{i}.key", f"past_key_values.{i}.value"])
-    output_names.extend([f"present.{i}.key", f"present.{i}.value"])
-    for name in [f"past_key_values.{i}.key", f"past_key_values.{i}.value", 
-                 f"present.{i}.key", f"present.{i}.value"]:
-        dynamic_axes[name] = {0: "batch", 2: "past_sequence_length"}
+    input_names += [f"past.{i}.key", f"past.{i}.value"]
+    output_names += [f"present.{i}.key", f"present.{i}.value"]
 
-# 4. Export to ONNX
+    dynamic_axes[f"past.{i}.key"] = {0: "batch", 2: "past_sequence"}
+    dynamic_axes[f"past.{i}.value"] = {0: "batch", 2: "past_sequence"}
+    dynamic_axes[f"present.{i}.key"] = {0: "batch", 2: "past_sequence"}
+    dynamic_axes[f"present.{i}.value"] = {0: "batch", 2: "past_sequence"}
+
+# ---------------------------------------------------------------------
+# Export
+# ---------------------------------------------------------------------
 torch.onnx.export(
-    model,
+    wrapped_model,
     model_args,
-    str(output_path),
+    output_path.as_posix(),
     input_names=input_names,
     output_names=output_names,
-    opset_version=13,
     dynamic_axes=dynamic_axes,
+    opset_version=13,
     export_params=True,
 )
 
-print(f"✅ Exported GPT2 to {output_path}")
+print("✅ GPT-2 ONNX export complete")
