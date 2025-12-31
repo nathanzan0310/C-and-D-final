@@ -25,14 +25,21 @@ JunctionD::~JunctionD() {
 }
 
 bool JunctionD::spawn(const FunctionData &func) {
+    // 1. Create the Pipes (The plumbing)
+    int pipe_in[2];  // We write to [1], Child reads from [0]
+    int pipe_out[2]; // Child writes to [1], We read from [0]
+
+    if (pipe(pipe_in) < 0 || pipe(pipe_out) < 0) {
+        perror("[junctiond] Failed to create pipes");
+        return false;
+    }
+
     std::string cfgFile;
     if (!generateConfig(func, cfgFile)) return false;
 
-    // Determine the path to the junction_run executable
+    // Determine path...
     const char* home = std::getenv("HOME");
     std::string junctionRun = std::string(home) + "/junction/build/junction/junction_run";
-    
-    // NOTE: The separate commandline string is still NOT used for execution.
 
     pid_t pid = fork();
     if (pid < 0) {
@@ -41,46 +48,69 @@ bool JunctionD::spawn(const FunctionData &func) {
     }
 
     if (pid == 0) {
-        // --- CHILD PROCESS: Assemble the command line for execution ---
-        
-        // 1. Start assembling the full list of command arguments.
-        std::vector<std::string> full_cmd_args = {
-            "junction_run",         // Arg 1: The program name
-            cfgFile,                // Arg 2: The config file path
-            "--",                   // Arg 3: The required separator
-            func.execpath           // Arg 4: The executable path inside the container
-        };
+        // --- CHILD PROCESS ---
 
-        // 2. Split func.args (e.g., "speed type") into separate tokens and append them.
+        // A. Redirect Standard Input (stdin)
+        // "Make my keyboard input come from the pipe, not the real keyboard"
+        dup2(pipe_in[0], STDIN_FILENO);
+
+        // B. Redirect Standard Output (stdout)
+        // "Make my std::cout go to the pipe, not the screen"
+        dup2(pipe_out[1], STDOUT_FILENO);
+
+        // C. Redirect Standard Error (stderr) - Optional but recommended
+        // Sometimes you want errors to still go to the real screen so you can debug
+        // dup2(pipe_out[1], STDERR_FILENO); 
+
+        // D. Close all pipe ends (Cleanup)
+        // The child has its copies in STDIN/STDOUT now, it doesn't need the raw FDs
+        close(pipe_in[0]);
+        close(pipe_in[1]);
+        close(pipe_out[0]);
+        close(pipe_out[1]);
+
+        // ... Prepare arguments (Your existing logic) ...
+        std::vector<std::string> full_cmd_args = {
+            "junction_run", cfgFile, func.execpath
+        };
         std::stringstream ss(func.args);
         std::string token;
-        while (ss >> token) {
-            full_cmd_args.push_back(token);
-        }
+        while (ss >> token) full_cmd_args.push_back(token);
 
-        // 3. Convert to the required char* array for execvp.
         std::vector<char*> c_args;
-        for (const auto& arg : full_cmd_args) {
-            c_args.push_back(const_cast<char*>(arg.c_str()));
-        }
-        c_args.push_back(nullptr); // The array must be NULL-terminated.
+        for (const auto& arg : full_cmd_args) c_args.push_back(const_cast<char*>(arg.c_str()));
+        c_args.push_back(nullptr);
 
-        // 4. Execute using execvp.
+        // Execute
         execvp(junctionRun.c_str(), c_args.data());
         
-        // execvp only returns if there is an error
-        std::cerr << "[junctiond] Exec failed for " << func.execpath 
-                  << "! Error: " << strerror(errno) << std::endl;
+        std::cerr << "[junctiond] Exec failed: " << strerror(errno) << std::endl;
         exit(1);
     }
     
-    // --- PARENT PROCESS: Tracking by func.name (Per your request) ---
+    // --- PARENT PROCESS ---
+
+    // A. Close the ends we don't use
+    // We WRITE to pipe_in, so close the read end
+    close(pipe_in[0]); 
+    // We READ from pipe_out, so close the write end
+    close(pipe_out[1]);
+
     std::lock_guard<std::mutex> lock(mtx);
-    // Assuming statusMap is keyed by std::string and stores FunctionStatus
     
-    // WARNING: This assumes func.name is unique for now.
-    statusMap[func.name] = {func.name, true, pid};
+    // B. Save the File Descriptors so invoke() can use them!
+    // You must update your 'FunctionStatus' struct to hold these ints.
+    FunctionStatus status;
+    status.name = func.name;
+    status.running = true;
+    status.pid = pid;
+    
+    status.fd_write = pipe_in[1];  // <--- SAVE THIS (Input)
+    status.fd_read  = pipe_out[0]; // <--- SAVE THIS (Output)
+    
+    statusMap[func.name] = status;
     std::cout << "[junctiond] Spawned " << func.name << " PID " << pid << std::endl;
+
     return true;
 }
 

@@ -19,7 +19,11 @@ struct FunctionData {
 struct FunctionStatus {
     std::string name;
     bool running;
-    int pid;
+    pid_t pid;
+    
+    // Add these two:
+    int fd_write; 
+    int fd_read;  
 };
 
 class JunctionD {

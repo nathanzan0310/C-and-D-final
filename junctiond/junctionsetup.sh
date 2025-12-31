@@ -8,6 +8,8 @@ INSTALL_DIR="/usr/local"
 BUILD_DIR="/tmp/protobuf_grpc_build"
 
 echo "=== 🚀 Starting Setup: Protobuf ($PROTOBUF_VERSION) and gRPC ($GRPC_VERSION) ==="
+sudo apt update
+sudo apt install -y protobuf-compiler libprotobuf-dev libgrpc++-dev
 
 # --- 1. System Update and Dependencies ---
 echo "--- 1. Installing Prerequisites ---"
